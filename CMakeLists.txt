@@ -14,10 +14,10 @@
 ## limitations under the License.                                           ##
 ## ======================================================================== ##
 
-cmake_minimum_required(VERSION 3.0)
+cmake_minimum_required(VERSION 3.1)
 
-set(OIDN_VERSION_MAJOR 0)
-set(OIDN_VERSION_MINOR 8)
+set(OIDN_VERSION_MAJOR 1)
+set(OIDN_VERSION_MINOR 1)
 set(OIDN_VERSION_PATCH 0)
 set(OIDN_VERSION_NOTE "")
 
@@ -29,8 +29,23 @@ project(OpenImageDenoise
   LANGUAGES CXX
 )
 
-set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake")
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${PROJECT_SOURCE_DIR}/cmake")
 
+# Build as shared or static library
+if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.13.0")
+  option(OIDN_STATIC_LIB "Build Intel(R) Open Image Denoise as a static library.")
+  mark_as_advanced(CLEAR OIDN_STATIC_LIB)
+else()
+  set(OIDN_STATIC_LIB OFF CACHE BOOL "Build Intel(R) Open Image Denoise as a static library." FORCE)
+  mark_as_advanced(OIDN_STATIC_LIB)
+endif()
+if(OIDN_STATIC_LIB)
+  set(OIDN_LIB_TYPE STATIC)
+else()
+  set(OIDN_LIB_TYPE SHARED)
+endif()
+
+# Configuration types
 set(CONFIGURATION_TYPES "Debug;Release;RelWithDebInfo")
 if(win32)
   if(NOT OIDN_DEFAULT_CMAKE_CONFIGURATION_TYPES_SET)
@@ -46,21 +61,13 @@ else()
   set_property(CACHE CMAKE_BUILD_TYPE PROPERTY STRINGS ${CONFIGURATION_TYPES})
 endif()
 
-include(GNUInstallDirs)
-
 # Output paths
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
 
-# Packaging
-option(OIDN_ZIP_MODE off)
-mark_as_advanced(OIDN_ZIP_MODE)
-if(OIDN_ZIP_MODE)
-  set(CMAKE_INSTALL_BINDIR bin)
-  set(CMAKE_INSTALL_LIBDIR lib)
-  set(CMAKE_INSTALL_DOCDIR doc)
-endif()
+# Configure packaging
+include(package)
 
 ## ----------------------------------------------------------------------------
 ## MKL-DNN
@@ -70,11 +77,11 @@ endif()
 set(MKLDNN_LIBRARY_TYPE "STATIC" CACHE INTERNAL "")
 set(MKLDNN_THREADING "TBB" CACHE INTERNAL "")
 set(MKLDNN_USE_MKL "NONE" CACHE INTERNAL "")
-set(MKLDNN_ENABLE_CONCURRENT_EXEC OFF CACHE INTERNAL "")
+set(MKLDNN_ENABLE_CONCURRENT_EXEC ON CACHE INTERNAL "")
 set(MKLDNN_USE_CLANG_SANITIZER "" CACHE INTERNAL "")
 set(MKLDNN_VERBOSE OFF CACHE BOOL "")
-set(WITH_EXAMPLE OFF CACHE INTERNAL "")
-set(WITH_TEST OFF CACHE INTERNAL "")
+set(MKLDNN_BUILD_EXAMPLES OFF CACHE INTERNAL "")
+set(MKLDNN_BUILD_TESTS OFF CACHE INTERNAL "")
 set(BENCHDNN_USE_RDPMC OFF CACHE INTERNAL "")
 
 # Add modified version of MKL-DNN
@@ -86,25 +93,18 @@ include(mkl-dnn/cmake/TBB.cmake)
 include(mkl-dnn/cmake/platform.cmake)
 include(mkl-dnn/cmake/SDL.cmake)
 
+# Propagate no warning flags
+append(CMAKE_C_FLAGS "${CMAKE_CCXX_NOWARN_FLAGS}")
+append(CMAKE_CXX_FLAGS "${CMAKE_CCXX_NOWARN_FLAGS}")
+
 ## ----------------------------------------------------------------------------
-## Open Image Denoise library
+## OIDN library
 ## ----------------------------------------------------------------------------
 
 # Generate version.h
 configure_file(
   "${PROJECT_SOURCE_DIR}/include/OpenImageDenoise/version.h.in"
   "${PROJECT_SOURCE_DIR}/include/OpenImageDenoise/version.h"
-)
-
-include_directories(
-  $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-  ${PROJECT_SOURCE_DIR}
-  ${PROJECT_SOURCE_DIR}/mkl-dnn/include
-  ${PROJECT_SOURCE_DIR}/mkl-dnn/src
-  ${PROJECT_SOURCE_DIR}/mkl-dnn/src/common
-  ${PROJECT_SOURCE_DIR}/mkl-dnn/src/cpu/xbyak
-  ${TBB_INCLUDE_DIR}
 )
 
 add_subdirectory(common EXCLUDE_FROM_ALL)
@@ -121,20 +121,21 @@ set(CORE_SOURCES
   core/buffer.h
   core/image.h
   core/filter.h
+  core/filter.cpp
   core/node.h
   core/input_reorder.h
   core/output_reorder.h
   core/weights_reorder.h
-  core/tone_mapping.h
+  core/transfer_function.h
   core/upsample.h
   core/network.h
   core/autoencoder.h
 )
 
-set(CORE_SOURCES_SSE42
+set(CORE_SOURCES_SSE41
   core/network.cpp
   core/autoencoder.cpp
-  core/tone_mapping.cpp
+  core/transfer_function.cpp
 )
 
 include(resource)
@@ -145,18 +146,30 @@ generate_cpp_resources(WEIGHTS_SOURCES "oidn::weights"
   weights/rt_hdr.tza
   weights/rt_hdr_alb.tza
   weights/rt_hdr_alb_nrm.tza
+  weights/rtlightmap_hdr.tza
 )
 
-add_library(${PROJECT_NAME} SHARED ${CORE_SOURCES} ${WEIGHTS_SOURCES})
+set_source_files_properties(${CORE_SOURCES_SSE41} PROPERTIES COMPILE_FLAGS "${ISA_FLAGS_SSE41}")
 
-add_library("${PROJECT_NAME}_sse42" STATIC ${CORE_SOURCES_SSE42})
-set_target_properties("${PROJECT_NAME}_sse42" PROPERTIES COMPILE_FLAGS "${ISA_FLAGS_SSE42}")
+add_library(${PROJECT_NAME} ${OIDN_LIB_TYPE} ${CORE_SOURCES} ${CORE_SOURCES_SSE41} ${WEIGHTS_SOURCES})
+
+if(OIDN_STATIC_LIB)
+  target_compile_definitions(${PROJECT_NAME} INTERFACE -DOIDN_STATIC_LIB)
+endif()
+
+target_include_directories(${PROJECT_NAME}
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/mkl-dnn/include
+    ${PROJECT_SOURCE_DIR}/mkl-dnn/src
+    ${PROJECT_SOURCE_DIR}/mkl-dnn/src/common
+    ${PROJECT_SOURCE_DIR}/mkl-dnn/src/cpu/xbyak
+)
 
 target_link_libraries(${PROJECT_NAME}
-  PUBLIC
-    ${TBB_LIBRARIES}
   PRIVATE
-    "${PROJECT_NAME}_sse42"
     common mkldnn
 )
 
@@ -164,14 +177,16 @@ set_property(TARGET ${PROJECT_NAME} PROPERTY VERSION ${PROJECT_VERSION})
 set_property(TARGET ${PROJECT_NAME} PROPERTY SOVERSION "0")
 
 ## ----------------------------------------------------------------------------
-## Open Image Denoise examples
+## OIDN examples
 ## ----------------------------------------------------------------------------
 
 add_subdirectory(examples)
 
 ## ----------------------------------------------------------------------------
-## Open Image Denoise install and packaging
+## OIDN install and packaging
 ## ----------------------------------------------------------------------------
 
 include(install)
-include(package)
+
+# Has to be last
+include(CPack)

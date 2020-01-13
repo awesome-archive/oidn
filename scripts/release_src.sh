@@ -16,59 +16,28 @@
 ## limitations under the License.                                           ##
 ## ======================================================================== ##
 
-# Set up the compiler
-COMPILER=icc
-if [ "$#" -ge 1 ]; then
-  COMPILER=$1
-fi
-if [[ $COMPILER == icc ]]; then
-  C_COMPILER=icc
-  CXX_COMPILER=icpc
-elif [[ $COMPILER == clang ]]; then
-  C_COMPILER=clang
-  CXX_COMPILER=clang++
-else
-  echo "Error: unknown compiler"
+if [ "$#" -ne 1 ]; then
+  echo "Usage: $0 version"
   exit 1
 fi
 
-# Set up dependencies
-ROOT_DIR=$PWD
-DEP_DIR=$ROOT_DIR/deps
-mkdir -p $DEP_DIR
-cd $DEP_DIR
-
-# Set up TBB
-TBB_VERSION=2019_U8
-TBB_BUILD=tbb2019_20190605oss
-TBB_DIR=$DEP_DIR/$TBB_BUILD
-if [ ! -d $TBB_DIR ]; then
-  TBB_URL=https://github.com/01org/tbb/releases/download/$TBB_VERSION/${TBB_BUILD}_mac.tgz
-  wget -N $TBB_URL
-  tar -xf `basename $TBB_URL`
+if [ -d oidn-$1 ]; then
+  echo "Error: oidn-$1 directory already exists"
+  exit 1
 fi
 
-# Get the number of build threads
-THREADS=`sysctl -n hw.physicalcpu`
+# Clone the repo
+git clone --recursive git@github.com:OpenImageDenoise/oidn.git oidn-$1
 
-# Create a clean build directory
-cd $ROOT_DIR
-rm -rf build_release
-mkdir build_release
-cd build_release
+# Checkout the requested version
+cd oidn-$1
+git checkout v$1
+git submodule update --recursive
 
-# Set compiler and release settings
-cmake \
--D CMAKE_C_COMPILER:FILEPATH=$C_COMPILER \
--D CMAKE_CXX_COMPILER:FILEPATH=$CXX_COMPILER \
--D TBB_ROOT=$TBB_DIR .. \
-..
+# Remove .git dirs and files
+find -name .git | xargs rm -rf
 
-# Build
-make -j $THREADS preinstall VERBOSE=1
-
-# Create tar.gz file
-cmake -D OIDN_ZIP_MODE=ON ..
-make -j $THREADS package
-
+# Create source packages
 cd ..
+tar -czvf oidn-$1.src.tar.gz oidn-$1
+zip -r oidn-$1.src.zip oidn-$1

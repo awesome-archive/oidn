@@ -131,6 +131,9 @@ namespace oidn {
   // Filter
   // --------------------------------------------------------------------------
 
+  // Progress monitor callback function
+  typedef bool (*ProgressMonitorFunction)(void* userPtr, double n);
+
   // Filter object with automatic reference counting
   class FilterRef
   {
@@ -237,9 +240,21 @@ namespace oidn {
       oidnSetFilter1i(handle, name, value);
     }
 
+    // Sets a float parameter of the filter.
+    void set(const char* name, float value)
+    {
+      oidnSetFilter1f(handle, name, value);
+    }
+
     // Gets a parameter of the filter.
     template<typename T>
     T get(const char* name);
+
+    // Sets the progress monitor callback function of the filter.
+    void setProgressMonitorFunction(ProgressMonitorFunction func, void* userPtr = nullptr)
+    {
+      oidnSetFilterProgressMonitorFunction(handle, (OIDNProgressMonitorFunction)func, userPtr);
+    }
 
     // Commits all previous changes to the filter.
     void commit()
@@ -268,11 +283,18 @@ namespace oidn {
     return oidnGetFilter1i(handle, name);
   }
 
+  // Gets a float parameter of the filter.
+  template<>
+  inline float FilterRef::get(const char* name)
+  {
+    return oidnGetFilter1f(handle, name);
+  }
+
   // --------------------------------------------------------------------------
   // Device
   // --------------------------------------------------------------------------
 
-  // Open Image Denoise device types
+  // Device types
   enum class DeviceType
   {
     Default = OIDN_DEVICE_TYPE_DEFAULT, // select device automatically
@@ -289,6 +311,7 @@ namespace oidn {
     InvalidOperation    = OIDN_ERROR_INVALID_OPERATION,    // the operation is not allowed
     OutOfMemory         = OIDN_ERROR_OUT_OF_MEMORY,        // not enough memory to execute the operation
     UnsupportedHardware = OIDN_ERROR_UNSUPPORTED_HARDWARE, // the hardware (e.g. CPU) is not supported
+    Cancelled           = OIDN_ERROR_CANCELLED,            // the operation was cancelled by the user
   };
 
   // Error callback function
@@ -436,7 +459,7 @@ namespace oidn {
     return oidnGetDevice1i(handle, name);
   }
 
-  // Creates a new Open Image Denoise device.
+  // Creates a new device.
   inline DeviceRef newDevice(DeviceType type = DeviceType::Default)
   {
     return DeviceRef(oidnNewDevice((OIDNDeviceType)type));

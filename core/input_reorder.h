@@ -22,75 +22,123 @@
 namespace oidn {
 
   // Input reorder node
-  template<int K, class TransferFunc>
+  template<int K, class TransferFunction>
   class InputReorderNode : public Node
   {
   private:
+    // Source
     Image color;
     Image albedo;
     Image normal;
 
+    // Destination
     std::shared_ptr<memory> dst;
     float* dstPtr;
     int C2;
     int H2;
     int W2;
 
-    std::shared_ptr<TransferFunc> transferFunc;
+    // Tile
+    int h1Begin;
+    int w1Begin;
+    int h2Begin;
+    int w2Begin;
+    int H;
+    int W;
+
+    std::shared_ptr<TransferFunction> transferFunc;
 
   public:
     InputReorderNode(const Image& color,
                      const Image& albedo,
                      const Image& normal,
                      const std::shared_ptr<memory>& dst,
-                     const std::shared_ptr<TransferFunc>& transferFunc)
+                     const std::shared_ptr<TransferFunction>& transferFunc)
       : color(color), albedo(albedo), normal(normal),
         dst(dst),
+        h1Begin(0), w1Begin(0),
+        H(color.height), W(color.width),
         transferFunc(transferFunc)
     {
-      memory::primitive_desc dstPrimDesc = dst->get_primitive_desc();
-      const mkldnn_memory_desc_t& dstDesc = dstPrimDesc.desc().data;
-      assert(dstDesc.format == BlockedFormat<K>::nChwKc);
+      const mkldnn_memory_desc_t& dstDesc = dst->get_desc().data;
+      assert(memory_desc_matches_tag(dstDesc, mkldnn_format_tag_t(BlockedFormat<K>::nChwKc)));
       assert(dstDesc.ndims == 4);
       assert(dstDesc.data_type == memory::data_type::f32);
       assert(dstDesc.dims[0] == 1);
       //assert(dstDesc.dims[1] >= getPadded<K>(C1));
-      assert(dstDesc.dims[2] >= color.height);
-      assert(dstDesc.dims[3] >= color.width);
 
       dstPtr = (float*)dst->get_data_handle();
       C2 = dstDesc.dims[1];
       H2 = dstDesc.dims[2];
       W2 = dstDesc.dims[3];
-
-      // Zero the destination because it may be padded
-      // We assume that the destination will not be modified by other nodes!
-      memset(dstPtr, 0, C2*H2*W2*sizeof(float));
     }
 
-    void execute() override
+    void setTile(int h1, int w1, int h2, int w2, int H, int W) override
     {
-      const int H1 = color.height;
-      const int W1 = color.width;
+      h1Begin = h1;
+      w1Begin = w1;
+      h2Begin = h2;
+      w2Begin = w2;
+      this->H = H;
+      this->W = W;
+    }
 
-      // Do mirror padding to avoid filtering artifacts near the edges
-      const int H = min(H2, 2*H1-2);
-      const int W = min(W2, 2*W1-2);
+    void execute(stream& sm) override
+    {
+      assert(H + h1Begin <= color.height);
+      assert(W + w1Begin <= color.width);
+      assert(H + h2Begin <= H2);
+      assert(W + w2Begin <= W2);
 
-      parallel_nd(H, [&](int h)
+      parallel_nd(H2, [&](int h2)
       {
-        for (int w = 0; w < W; ++w)
-        {
-          // Compute mirror padded coords
-          const int h1 = h < H1 ? h : 2*H1-2-h;
-          const int w1 = w < W1 ? w : 2*W1-2-w;
+        const int h = h2 - h2Begin;
 
-          int c = 0;
-          storeColor(h, w, c, (float*)color.get(h1, w1));
-          if (albedo)
-            storeAlbedo(h, w, c, (float*)albedo.get(h1, w1));
-          if (normal)
-            storeNormal(h, w, c, (float*)normal.get(h1, w1));
+        if (h >= 0 && h < H)
+        {
+          const int h1 = h + h1Begin;
+
+          // Zero pad
+          for (int w2 = 0; w2 < w2Begin; ++w2)
+          {
+            int c = 0;
+            while (c < C2)
+              store(h2, w2, c, 0.f);
+          }
+
+          // Reorder
+          for (int w = 0; w < W; ++w)
+          {
+            const int w1 = w + w1Begin;
+            const int w2 = w + w2Begin;
+
+            int c = 0;
+            storeColor(h2, w2, c, (float*)color.get(h1, w1));
+            if (albedo)
+              storeAlbedo(h2, w2, c, (float*)albedo.get(h1, w1));
+            if (normal)
+              storeNormal(h2, w2, c, (float*)normal.get(h1, w1));
+            while (c < C2)
+              store(h2, w2, c, 0.f);
+          }
+
+          // Zero pad
+          for (int w2 = W + w2Begin; w2 < W2; ++w2)
+          {
+            int c = 0;
+            while (c < C2)
+              store(h2, w2, c, 0.f);
+          }
+        }
+        else
+        {
+          // Zero pad
+          for (int w2 = 0; w2 < W2; ++w2)
+          {
+            int c = 0;
+            while (c < C2)
+              store(h2, w2, c, 0.f);
+          }
         }
       });
     }
@@ -117,7 +165,7 @@ namespace oidn {
         float x = values[i];
 
         // Sanitize the value
-        x = isfinite(x) ? max(x, 0.f) : 0.f;
+        x = maxSafe(x, 0.f);
 
         // Apply the transfer function
         x = transferFunc->forward(x);
@@ -137,7 +185,7 @@ namespace oidn {
         float x = values[i];
 
         // Sanitize the value
-        x = isfinite(x) ? clamp(x, 0.f, 1.f) : 0.f;
+        x = clampSafe(x, 0.f, 1.f);
 
         // Store the value
         store(h, w, c, x);
@@ -153,13 +201,16 @@ namespace oidn {
       float z = values[2];
 
       // Compute the length of the normal
-      const float length2 = sqr(x) + sqr(y) + sqr(z);
+      const float lengthSqr = sqr(x) + sqr(y) + sqr(z);
 
       // Normalize the normal and transform it to [0..1]
-      if (isfinite(length2) && length2 > 1e-8f)
+      if (isfinite(lengthSqr))
       {
-        const float scale  = rsqrt(length2) * 0.5f;
+        const float invLength = (lengthSqr > minVectorLengthSqr) ? rsqrt(lengthSqr) : 1.f;
+
+        const float scale  = invLength * 0.5f;
         const float offset = 0.5f;
+
         x = x * scale + offset;
         y = y * scale + offset;
         z = z * scale + offset;

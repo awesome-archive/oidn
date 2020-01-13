@@ -23,8 +23,8 @@ namespace oidn {
 
   Device::Device()
   {
-    if (!mayiuse(sse42))
-      throw Exception(Error::UnsupportedHardware, "SSE4.2 support is required at minimum");
+    if (!mayiuse(sse41))
+      throw Exception(Error::UnsupportedHardware, "SSE4.1 support is required at minimum");
   }
 
   Device::~Device()
@@ -44,6 +44,10 @@ namespace oidn {
         curError.code = code;
         curError.message = message;
       }
+
+      // Print the error message in verbose mode
+      if (device->isVerbose())
+        std::cerr << "Error: " << message << std::endl;
 
       // Call the error callback function
       ErrorFunction errorFunc;
@@ -103,6 +107,8 @@ namespace oidn {
       return numThreads;
     else if (name == "setAffinity")
       return setAffinity;
+    else if (name == "verbose")
+      return verbose;
     else if (name == "version")
       return OIDN_VERSION;
     else if (name == "versionMajor")
@@ -121,6 +127,11 @@ namespace oidn {
       numThreads = value;
     else if (name == "setAffinity")
       setAffinity = value;
+    else if (name == "verbose")
+    {
+      verbose = value;
+      error.verbose = value;
+    }
 
     dirty = true;
   }
@@ -133,7 +144,7 @@ namespace oidn {
     // Get the optimal thread affinities
     if (setAffinity)
     {
-      affinity = std::make_shared<ThreadAffinity>(1); // one thread per core
+      affinity = std::make_shared<ThreadAffinity>(1, verbose); // one thread per core
       if (affinity->getNumThreads() == 0)
         affinity.reset();
     }
@@ -148,6 +159,9 @@ namespace oidn {
       observer = std::make_shared<PinningObserver>(affinity, *arena);
 
     dirty = false;
+
+    if (isVerbose())
+      print();
   }
 
   void Device::checkCommitted()
@@ -172,14 +186,36 @@ namespace oidn {
   {
     checkCommitted();
 
+    if (isVerbose())
+      std::cout << "Filter: " << type << std::endl;
+
     Ref<Filter> filter;
 
     if (type == "RT")
       filter = makeRef<RTFilter>(Ref<Device>(this));
+    else if (type == "RTLightmap")
+      filter = makeRef<RTLightmapFilter>(Ref<Device>(this));
     else
       throw Exception(Error::InvalidArgument, "unknown filter type");
 
     return filter;
+  }
+
+  void Device::print()
+  {
+    std::cout << std::endl;
+
+    std::cout << "Intel(R) Open Image Denoise " << OIDN_VERSION_STRING << std::endl;
+    std::cout << "  Compiler: " << getCompilerName() << std::endl;
+    std::cout << "  Build   : " << getBuildName() << std::endl;
+    std::cout << "  Platform: " << getPlatformName() << std::endl;
+
+    std::cout << "  Tasking :";
+    std::cout << " TBB" << TBB_VERSION_MAJOR << "." << TBB_VERSION_MINOR;
+    std::cout << " TBB_header_interface_" << TBB_INTERFACE_VERSION << " TBB_lib_interface_" << tbb::TBB_runtime_interface_version();
+    std::cout << std::endl;
+
+    std::cout << std::endl;
   }
 
 } // namespace oidn

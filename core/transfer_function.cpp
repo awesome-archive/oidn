@@ -14,11 +14,14 @@
 // limitations under the License.                                           //
 // ======================================================================== //
 
-#include "tone_mapping.h"
+#include "transfer_function.h"
 
 namespace oidn {
 
-  float autoexposure(const Image& color)
+  const float LogTransferFunction::xScale = 1.f / log(LogTransferFunction::yMax + 1.f);
+  const float PQXTransferFunction::xScale = 1.f / PQXTransferFunction::pqxForward(PQXTransferFunction::yMax * PQXTransferFunction::yScale);
+
+  float AutoexposureNode::autoexposure(const Image& color)
   {
     assert(color.format == Format::Float3);
 
@@ -59,7 +62,12 @@ namespace oidn {
                 for (int w = beginW; w < endW; ++w)
                 {
                   const float* rgb = (const float*)color.get(h, w);
-                  L += luminance(rgb[0], rgb[1], rgb[2]);
+
+                  const float r = maxSafe(rgb[0], 0.f);
+                  const float g = maxSafe(rgb[1], 0.f);
+                  const float b = maxSafe(rgb[2], 0.f);
+
+                  L += luminance(r, g, b);
                 }
               }
 

@@ -18,7 +18,7 @@
 
 #include "filter.h"
 #include "network.h"
-#include "tone_mapping.h"
+#include "transfer_function.h"
 
 namespace oidn {
 
@@ -28,20 +28,35 @@ namespace oidn {
 
   class AutoencoderFilter : public Filter
   {
-  private:
+  protected:
+    static constexpr int alignment       = 32;  // required spatial alignment in pixels (padding may be necessary)
+    static constexpr int receptiveField  = 222; // receptive field in pixels
+    static constexpr int overlap         = roundUp(receptiveField / 2, alignment); // required spatial overlap between tiles in pixels
+
+    static constexpr int estimatedBytesBase       = 16*1024*1024; // estimated base memory usage
+    static constexpr int estimatedBytesPerPixel8  = 889;          // estimated memory usage per pixel for K=8
+    static constexpr int estimatedBytesPerPixel16 = 2185;         // estimated memory usage per pixel for K=16
+
     Image color;
     Image albedo;
     Image normal;
     Image output;
     bool hdr = false;
+    float hdrScale = std::numeric_limits<float>::quiet_NaN();
     bool srgb = false;
+    int maxMemoryMB = 6000; // approximate maximum memory usage in MBs
 
-    std::shared_ptr<Node> net;
-    std::shared_ptr<TransferFunc> transferFunc;
+    int H = 0;          // image height
+    int W = 0;          // image width
+    int tileH = 0;      // tile height
+    int tileW = 0;      // tile width
+    int tileCountH = 1; // number of tiles in H dimension
+    int tileCountW = 1; // number of tiles in W dimension
 
-    bool dirty = true;
+    std::shared_ptr<Executable> net;
+    std::shared_ptr<Node> inputReorder;
+    std::shared_ptr<Node> outputReorder;
 
-  protected:
     struct
     {
       void* ldr         = nullptr;
@@ -53,17 +68,23 @@ namespace oidn {
     } weightData;
 
     explicit AutoencoderFilter(const Ref<Device>& device);
+    virtual std::shared_ptr<TransferFunction> makeTransferFunc();
 
   public:
     void setImage(const std::string& name, const Image& data) override;
     void set1i(const std::string& name, int value) override;
     int get1i(const std::string& name) override;
+    void set1f(const std::string& name, float value) override;
+    float get1f(const std::string& name) override;
+
     void commit() override;
     void execute() override;
 
   private:
+    void computeTileSize();
+
     template<int K>
-    std::shared_ptr<Node> buildNet();
+    std::shared_ptr<Executable> buildNet();
 
     bool isCommitted() const { return bool(net); }
   };
@@ -76,6 +97,17 @@ namespace oidn {
   {
   public:
     explicit RTFilter(const Ref<Device>& device);
+  };
+
+  // --------------------------------------------------------------------------
+  // RTLightmapFilter - Ray traced lightmap denoiser
+  // --------------------------------------------------------------------------
+
+  class RTLightmapFilter : public AutoencoderFilter
+  {
+  public:
+    explicit RTLightmapFilter(const Ref<Device>& device);
+    std::shared_ptr<TransferFunction> makeTransferFunc() override;
   };
 
 } // namespace oidn

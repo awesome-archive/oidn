@@ -18,14 +18,28 @@ rem ======================================================================== rem
 
 setlocal
 
+rem Set up the compiler
+set COMPILER=icc
+if not "%1" == "" (
+  set COMPILER=%1
+)
+if %COMPILER% == icc (
+  set TOOLSET="Intel C++ Compiler 18.0"
+) else if %COMPILER% == msvc (
+  set TOOLSET=""
+) else (
+  echo Error: unknown compiler
+  goto abort
+)
+
 rem Set up dependencies
 set ROOT_DIR=%cd%
 set DEP_DIR=%ROOT_DIR%\deps
 cd %DEP_DIR%
 
 rem Set up TBB
-set TBB_VERSION=2019_U2
-set TBB_BUILD=tbb2019_20181010oss
+set TBB_VERSION=2019_U8
+set TBB_BUILD=tbb2019_20190605oss
 set TBB_DIR=%DEP_DIR%\%TBB_BUILD%
 if not exist %TBB_DIR% (
   echo Error: %TBB_DIR% is missing
@@ -41,7 +55,7 @@ cd build_release
 rem Set compiler and release settings
 cmake -L ^
 -G "Visual Studio 15 2017 Win64" ^
--T "Intel C++ Compiler 18.0" ^
+-T %TOOLSET% ^
 -D TBB_ROOT=%TBB_DIR% ^
 ..
 if %ERRORLEVEL% geq 1 goto abort

@@ -49,6 +49,25 @@ function check_symbols
   done
 }
 
+# Set up the compiler
+COMPILER=icc
+if [ "$#" -ge 1 ]; then
+  COMPILER=$1
+fi
+if [[ $COMPILER == icc ]]; then
+  C_COMPILER=icc
+  CXX_COMPILER=icpc
+elif [[ $COMPILER == clang ]]; then
+  C_COMPILER=clang
+  CXX_COMPILER=clang++
+elif [[ $COMPILER == gcc ]]; then
+  C_COMPILER=gcc
+  CXX_COMPILER=g++
+else
+  echo "Error: unknown compiler"
+  exit 1
+fi
+
 # Set up dependencies
 ROOT_DIR=$PWD
 DEP_DIR=$ROOT_DIR/deps
@@ -56,8 +75,8 @@ mkdir -p $DEP_DIR
 cd $DEP_DIR
 
 # Set up TBB
-TBB_VERSION=2019_U2
-TBB_BUILD=tbb2019_20181010oss
+TBB_VERSION=2019_U8
+TBB_BUILD=tbb2019_20190605oss
 TBB_DIR=$DEP_DIR/$TBB_BUILD
 if [ ! -d $TBB_DIR ]; then
   TBB_URL=https://github.com/01org/tbb/releases/download/$TBB_VERSION/${TBB_BUILD}_lin.tgz
@@ -76,8 +95,8 @@ cd build_release
 
 # Set compiler and release settings
 cmake \
--D CMAKE_C_COMPILER:FILEPATH=icc \
--D CMAKE_CXX_COMPILER:FILEPATH=icpc \
+-D CMAKE_C_COMPILER:FILEPATH=$C_COMPILER \
+-D CMAKE_CXX_COMPILER:FILEPATH=$CXX_COMPILER \
 -D TBB_ROOT=$TBB_DIR .. \
 ..
 

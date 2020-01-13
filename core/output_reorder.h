@@ -22,59 +22,86 @@
 namespace oidn {
 
   // Output reorder node
-  template<int K, class TransferFunc>
+  template<int K, class TransferFunction>
   class OutputReorderNode : public Node
   {
   private:
+    // Source
     std::shared_ptr<memory> src;
     const float* srcPtr;
     int H1;
     int W1;
 
+    // Destination
     Image output;
 
-    std::shared_ptr<TransferFunc> transferFunc;
+    // Tile
+    int h1Begin;
+    int w1Begin;
+    int h2Begin;
+    int w2Begin;
+    int H;
+    int W;
+
+    std::shared_ptr<TransferFunction> transferFunc;
 
   public:
     OutputReorderNode(const std::shared_ptr<memory>& src,
                       const Image& output,
-                      const std::shared_ptr<TransferFunc>& transferFunc)
+                      const std::shared_ptr<TransferFunction>& transferFunc)
       : src(src),
         output(output),
+        h1Begin(0), w1Begin(0),
+        h2Begin(0), w2Begin(0),
+        H(output.height), W(output.width),
         transferFunc(transferFunc)
     {
-      memory::primitive_desc srcPrimDesc = src->get_primitive_desc();
-      const mkldnn_memory_desc_t& srcDesc = srcPrimDesc.desc().data;
+      const mkldnn_memory_desc_t& srcDesc = src->get_desc().data;
       MAYBE_UNUSED(srcDesc);
-      assert(srcDesc.format == BlockedFormat<K>::nChwKc);
+      assert(memory_desc_matches_tag(srcDesc, mkldnn_format_tag_t(BlockedFormat<K>::nChwKc)));
       assert(srcDesc.ndims == 4);
       assert(srcDesc.data_type == memory::data_type::f32);
       assert(srcDesc.dims[0] == 1);
       // We assume output data is <= K OC
       assert(srcDesc.dims[1] == K);
 
-      assert(output.height <= srcDesc.dims[2]);
-      assert(output.width  <= srcDesc.dims[3]);
-
       srcPtr = (float*)src->get_data_handle();
       H1 = srcDesc.dims[2];
       W1 = srcDesc.dims[3];
     }
 
-    void execute() override
+    void setTile(int h1, int w1, int h2, int w2, int H, int W) override
     {
-      const int C1 = K;
-      const int H2 = output.height;
-      const int W2 = output.width;
+      h1Begin = h1;
+      w1Begin = w1;
+      h2Begin = h2;
+      w2Begin = w2;
+      this->H = H;
+      this->W = W;
+    }
 
-      parallel_nd(H2, [&](int h)
+    void execute(stream& sm) override
+    {
+      assert(h1Begin + H <= H1);
+      assert(w1Begin + W <= W1);
+      assert(h2Begin + H <= output.height);
+      assert(w2Begin + W <= output.width);
+
+      const int C1 = K;
+
+      parallel_nd(H, [&](int h)
       {
-        for (int w = 0; w < W2; ++w)
+        const int h1 = h + h1Begin;
+        const int h2 = h + h2Begin;
+
+        for (int w = 0; w < W; ++w)
         {
-          float* dstPtr_C = (float*)output.get(h, w);
+          const int w1 = w + w1Begin;
+          const int w2 = w + w2Begin;
+          float* dstPtr_C = (float*)output.get(h2, w2);
 
           // Source is in nChwKc format. In this case C is 1 so this is really nhwc
-          const float* srcPtr_C = srcPtr + h*W1*C1 + w*C1;
+          const float* srcPtr_C = srcPtr + h1*W1*C1 + w1*C1;
 
           #pragma unroll
           for (int i = 0; i < 3; ++i)
@@ -83,13 +110,13 @@ namespace oidn {
             float x = srcPtr_C[i];
 
             // The CNN output may contain negative values or even NaNs, so it must be sanitized
-            x = isfinite(x) ? max(x, 0.f) : 0.f;
+            x = maxSafe(x, 0.f);
 
             // Apply the inverse transfer function
             x = transferFunc->inverse(x);
 
-            // Store the value
-            dstPtr_C[i] = x;
+            // Sanitize and store the final value
+            dstPtr_C[i] = max(x, 0.f);
           }
         }
       });

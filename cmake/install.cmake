@@ -14,6 +14,10 @@
 ## limitations under the License.                                           ##
 ## ======================================================================== ##
 
+## ----------------------------------------------------------------------------
+## Install library
+## ----------------------------------------------------------------------------
+
 install(TARGETS ${PROJECT_NAME}
   EXPORT
     ${PROJECT_NAME}_Export
@@ -24,32 +28,39 @@ install(TARGETS ${PROJECT_NAME}
   # On Windows put the dlls into bin
   RUNTIME
     DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT lib
-  INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
-# Use full absolute path as install name
-if(NOT OIDN_ZIP_MODE)
-  set(CMAKE_INSTALL_NAME_DIR ${CMAKE_INSTALL_FULL_LIBDIR})
-else()
-  if(APPLE)
-    set(CMAKE_INSTALL_RPATH "@loader_path/../lib")
-  else()
-    set(CMAKE_INSTALL_RPATH "$ORIGIN/../lib")
-  endif()
+if(OIDN_STATIC_LIB)
+  install(TARGETS common mkldnn
+    EXPORT
+      ${PROJECT_NAME}_Export
+    ARCHIVE
+      DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT devel
+  )
 endif()
 
-# Install headers
+## ----------------------------------------------------------------------------
+## Install headers
+## ----------------------------------------------------------------------------
+
 install(DIRECTORY include/OpenImageDenoise
   DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
   COMPONENT devel
   PATTERN "*.in" EXCLUDE
 )
 
-# Install documentation
+## ----------------------------------------------------------------------------
+## Install documentation
+## ----------------------------------------------------------------------------
+
 install(FILES ${PROJECT_SOURCE_DIR}/LICENSE.txt DESTINATION ${CMAKE_INSTALL_DOCDIR} COMPONENT lib)
 install(FILES ${PROJECT_SOURCE_DIR}/CHANGELOG.md DESTINATION ${CMAKE_INSTALL_DOCDIR} COMPONENT lib)
 install(FILES ${PROJECT_SOURCE_DIR}/README.md DESTINATION ${CMAKE_INSTALL_DOCDIR} COMPONENT lib)
 install(FILES ${PROJECT_SOURCE_DIR}/readme.pdf DESTINATION ${CMAKE_INSTALL_DOCDIR} COMPONENT lib)
+
+## ----------------------------------------------------------------------------
+## Install dependencies
+## ----------------------------------------------------------------------------
 
 # Install TBB
 if(OIDN_ZIP_MODE)
@@ -62,6 +73,10 @@ if(OIDN_ZIP_MODE)
     install(PROGRAMS ${TBB_ROOT}/lib/intel64/gcc4.4/libtbb.so.2 ${TBB_ROOT}/lib/intel64/gcc4.4/libtbbmalloc.so.2 DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT lib)
   endif()
 endif()
+
+## ----------------------------------------------------------------------------
+## Install CMake configuration files
+## ----------------------------------------------------------------------------
 
 install(EXPORT ${PROJECT_NAME}_Export
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/${PROJECT_NAME}
